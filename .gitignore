@@ -11,3 +11,7 @@
 .hc
 .running
 *.bkp
+
+# PAI
+/.claude
+/Plans

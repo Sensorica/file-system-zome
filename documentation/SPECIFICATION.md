@@ -6,7 +6,7 @@ Evolve this project from a proof-of-concept using outdated HDK into a production
 
 ## Target State
 
-- Compiles against Holochain 0.4.x (current stable HDK/HDI)
+- Compiles against Holochain 0.6.x (current stable HDK/HDI)
 - Delegates chunk operations to `holochain-open-dev/file-storage`
 - All known bugs fixed
 - All existing tests passing
@@ -244,18 +244,86 @@ Start with Phase 1 — nothing else is possible until the HDK compiles.
 
 ## Testing Strategy
 
-All phases must maintain a passing test suite. The test matrix:
+Two complementary test frameworks cover different levels of the stack.
 
-| Test | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
-|------|---------|---------|---------|---------|
-| create files and get by path | pass | pass | pass | pass |
-| create large file and delete | pass | pass | must include path link cleanup | pass |
-| create, update, read, cascade delete | pass | pass | pass | pass |
-| empty name and path standardization | pass | pass | pass | pass |
-| move file (new) | — | — | — | add |
-| directory listing non-recursive (new) | — | — | — | add |
+### Sweettest (Rust — zome-level)
 
-Run tests after each phase:
+`holochain::sweettest` is a Rust-native in-process test harness embedded in the `holochain` crate. It runs conductors in-memory — no external process needed — and gives direct access to Holochain's Rust types.
+
+**When to use sweettest:**
+- Testing validation rules and entry type logic
+- Testing CRUD operations, path conversion, version chain traversal
+- Fast CI feedback (in-process, no WASM recompile per test)
+- Tests that only need Rust types
+
+**Minimal sweettest example:**
+
+```rust
+use holochain::sweettest::{SweetConductor, SweetDnaFile};
+use serde_json::json;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_create_file() {
+    let mut conductor = SweetConductor::from_standard_config().await;
+
+    let dna = SweetDnaFile::unique_from_test_wasms(vec![
+        "file_system_integrity",
+        "file_system",
+    ])
+    .await;
+
+    let app = conductor.setup_app("test-app", &[dna]).await.unwrap();
+    let cell = app.into_cells().into_iter().next().unwrap();
+
+    let result: serde_json::Value = conductor
+        .call(&cell.zome("file_system"), "create_file", json!({
+            "name": "test.txt",
+            "path": "/",
+            "file_type": "text/plain",
+            "content": []
+        }))
+        .await;
+
+    assert!(result.get("entry_hash").is_some());
+}
+```
+
+Sweettest tests live in the coordinator crate under `tests/` and run with:
 ```bash
+cargo test --manifest-path dnas/file_system/zomes/coordinator/file_system/Cargo.toml
+```
+
+### Tryorama (TypeScript — scenario-level)
+
+`@holochain/tryorama` runs two agents (Alice and Bob) against a real conductor over WebSocket. It tests user interaction flows, signal emission, and multi-agent DHT behavior.
+
+**When to use tryorama:**
+- Multi-agent coordination scenarios
+- Signal verification (real conductor emits actual signals)
+- Testing from the perspective of a TypeScript frontend client
+- End-to-end flows mirroring real app usage
+
+### Test Matrix
+
+All phases must maintain a passing test suite across both frameworks.
+
+| Test | Framework | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
+|------|-----------|---------|---------|---------|---------|
+| create files and get by path | both | pass | pass | pass | pass |
+| create large file and delete | both | pass | pass | must include path link cleanup | pass |
+| create, update, read, cascade delete | both | pass | pass | pass | pass |
+| empty name and path standardization | sweettest | pass | pass | pass | pass |
+| validation rule rejection | sweettest | pass | pass | pass | pass |
+| signal emission on create/update/delete | tryorama | pass | pass | pass | pass |
+| multi-agent visibility | tryorama | pass | pass | pass | pass |
+| move file (new) | both | — | — | — | add |
+| directory listing non-recursive (new) | both | — | — | — | add |
+
+Run all tests after each phase:
+```bash
+# Sweettest (Rust)
+cargo test --manifest-path dnas/file_system/zomes/coordinator/file_system/Cargo.toml
+
+# Tryorama (TypeScript) — requires hApp to be built first
 npm test
 ```

@@ -32,13 +32,15 @@ The zome must support organizing files into a navigable directory hierarchy.
 
 ### FR-2: Author Attribution
 
-Every file must record the `AgentPubKey` of its original creator.
+Every file must record its original creator via an `AuthorToFileMetadata` DHT link, not as a field in the `FileMetadata` entry.
 
-- Author is set at creation time and is immutable
-- Author reflects the Holochain agent who called `create_file`, not a user-supplied value
-- Attribution is preserved through version updates
+- An `AuthorToFileMetadata` link is created from the author's identity hash to the `FileMetadata` action hash at file creation time
+- The link base is `AnyLinkableHash`: typically an `AgentPubKey`, but consuming hApps may substitute a profile entry hash or other identity anchor
+- The link is never deleted — authorship is permanent and immutable
+- The author is determined by the calling agent at `create_file` time, not a user-supplied value
+- Attribution is preserved through version updates: the link targets the original action hash, which is the stable file identifier
 
-**Rationale:** Commons governance requires knowing who created or uploaded a document. Nondominium resource governance depends on attributed authorship.
+**Rationale:** Commons governance requires knowing who created or uploaded a document. Nondominium resource governance depends on attributed authorship. Using a flexible link base allows consuming hApps (with their own profile/identity systems) to attribute files to a richer identity object rather than a raw agent key.
 
 ### FR-3: Content Versioning
 
@@ -48,6 +50,7 @@ File content must support update without destroying history.
 - `get_file_metadata()` always resolves to the latest version
 - Old chunks are cleaned up (marked deleted) when a new version supersedes them
 - The original file action hash remains the stable identifier across all versions
+- File creation and modification times are available from Holochain action metadata (`action.timestamp()`), not from entry fields
 
 **Rationale:** Governance documents change over time. Learning content is revised. The stable original hash allows references (links from governance entries, bookmarks, etc.) to survive updates without breaking.
 
@@ -93,7 +96,7 @@ The zome must be embeddable in other DNAs without modification.
 
 ### NFR-1: Modern HDK Compatibility
 
-The zome must target Holochain 0.4.x (HDK/HDI current stable).
+The zome must target Holochain 0.6.x (HDK/HDI current stable).
 
 - The current implementation uses HDI v0.2.2 / HDK v0.1.2 and must be updated
 - The updated zome must pass all existing tests against the new HDK version
@@ -108,11 +111,23 @@ Chunk operations must delegate to `holochain-open-dev/file-storage`.
 
 ### NFR-3: Test Coverage
 
-All public functions must have integration tests using `@holochain/tryorama`.
+Public functions must be tested at two levels using complementary frameworks.
 
-- Tests run two agents (Alice and Bob) on a shared DHT
+**Zome-level tests (sweettest):** Rust-native in-process tests using `holochain::sweettest`.
+
+- Fast feedback loop: tests run in-process with no WASM compile step per test
+- Full Rust type safety — no type redefinition needed between zome and test code
+- Use for: validation rules, entry creation/update/delete logic, version chain traversal, path conversion
+- Located in `dnas/file_system/zomes/coordinator/file_system/tests/` (Rust `#[tokio::test]` functions)
+
+**Scenario-level tests (tryorama):** TypeScript integration tests using `@holochain/tryorama`.
+
+- Tests run two agents (Alice and Bob) against a real conductor over WebSocket
 - Coverage must include: create, update, delete, path traversal, version chain, signals
 - Known edge cases: empty file name, forbidden path characters, concurrent agents
+- Located in `tests/` (TypeScript with vitest)
+
+Both test suites must pass before any phase is considered complete.
 
 ---
 

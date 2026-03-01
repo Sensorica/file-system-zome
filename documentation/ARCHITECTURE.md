@@ -16,33 +16,35 @@ This separation means community maintenance of the chunk layer (HDK version upda
 
 ```
 ╔════════════════════════════════════════════════════════════════╗
-║  Application Layer (Nondominium / hAppenings / IDI)           ║
-║  Calls create_file(), get_files_by_path(), update_file()      ║
+║  Application Layer (Nondominium / hAppenings / IDI)            ║
+║  Calls create_file(), get_files_by_path(), update_file()       ║
 ╚══════════════════════════════╦═════════════════════════════════╝
-                               │
-╔══════════════════════════════▼═════════════════════════════════╗
-║  File System Layer (this project)                              ║
-║                                                                ║
-║  ┌────────────────────────┐  ┌──────────────────────────────┐  ║
-║  │   Integrity Zome       │  │   Coordinator Zome           │  ║
-║  │ ────────────────────── │  │ ─────────────────────────── │  ║
-║  │ FileMetadata entry     │  │ create_file()                │  ║
-║  │ PathFileSystem link    │  │ update_file()                │  ║
-║  │ PathToFileMetaData lnk │  │ delete_file()                │  ║
-║  │ FileMetaDataUpdate lnk │  │ get_file_metadata()          │  ║
-║  │ Validation rules       │  │ get_file_chunks()            │  ║
-║  └────────────────────────┘  │ get_files_by_path()          │  ║
-║                              │ Path conversion utilities    │  ║
-║                              │ post_commit signals          │  ║
-║                              └──────────────────────────────┘  ║
-╚══════════════════════════════╦═════════════════════════════════╝
+                               ║
+                               ▼
+╔═════════════════════════════════════════════════════════════════╗
+║  File System Layer (this project)                               ║
+║                                                                 ║
+║  ┌─────────────────────────┐  ┌──────────────────────────────┐  ║
+║  │   Integrity Zome        │  │   Coordinator Zome           │  ║
+║  │ ──────────────────────  │  │ ──────────────────────────── │  ║
+║  │ FileMetadata entry      │  │ create_file()                │  ║
+║  │ PathFileSystem link     │  │ update_file()                │  ║
+║  │ PathToFileMetaData lnk  │  │ delete_file()                │  ║
+║  │ FileMetaDataUpdate lnk  │  │ get_file_metadata()          │  ║
+║  │ AuthorToFileMetaData lnk│  │ get_file_chunks()            │  ║
+║  │ Validation rules        │  │ get_files_by_path()          │  ║
+║  └─────────────────────────┘  │ Path conversion utilities    │  ║
+║                               │ post_commit signals          │  ║
+║                               └──────────────────────────────┘  ║
+╚══════════════════════════════╦══════════════════════════════════╝
                                │ call() — chunk operations
-╔══════════════════════════════▼═════════════════════════════════╗
+                               ▼
+╔════════════════════════════════════════════════════════════════╗
 ║  Community Chunk Layer (holochain-open-dev/file-storage)       ║
 ║                                                                ║
 ║  ┌────────────────────────┐  ┌──────────────────────────────┐  ║
 ║  │   Integrity Zome       │  │   Coordinator Zome           │  ║
-║  │ ────────────────────── │  │ ─────────────────────────── │  ║
+║  │ ────────────────────── │  │ ──────────────────────────── │  ║
 ║  │ FileChunk entry        │  │ create_file_chunk()          │  ║
 ║  │                        │  │ get_file_chunk()             │  ║
 ║  └────────────────────────┘  └──────────────────────────────┘  ║
@@ -60,18 +62,19 @@ The central organizing entry. One per file, updated on version changes.
 ```rust
 pub struct FileMetadata {
     pub name: String,           // File name (immutable after creation)
-    pub author: AgentPubKey,    // Original creator (immutable)
     pub path: String,           // Filesystem path, e.g. "/documents/report.pdf"
-    pub created: Timestamp,     // Creation time (immutable)
-    pub last_modified: Timestamp, // Updated on each version
     pub size: usize,            // Total size in bytes (latest version)
     pub file_type: String,      // MIME type or extension (immutable)
     pub chunks_hashes: Vec<EntryHash>, // Ordered chunk entry hashes (latest version)
 }
 ```
 
-**Immutable fields:** `name`, `author`, `path`, `created`, `file_type` — these never change across versions.
-**Mutable fields:** `last_modified`, `size`, `chunks_hashes` — updated on each version.
+**Immutable fields:** `name`, `path`, `file_type` — these never change across versions.
+**Mutable fields:** `size`, `chunks_hashes` — updated on each version.
+
+> **Timestamps** are not stored in the entry — `created` is the timestamp of the create action, and `last_modified` is the timestamp of the latest update action. Both are available from Holochain action metadata.
+>
+> **Authorship** is tracked via the `AuthorToFileMetadata` link (see Link Types below), not as an entry field. The link base can be an `AgentPubKey` or any identity anchor (e.g., a profile entry hash) defined by the consuming hApp.
 
 ### `FileChunk` (Community Layer — Integrity Zome)
 
@@ -118,6 +121,19 @@ Links the original `FileMetadata` action hash to the updated version's action ha
 ```
 
 `get_file_metadata()` traverses this chain to find the most recent version by timestamp.
+
+### `AuthorToFileMetadata`
+
+Links an author identity anchor to the `FileMetadata` action hash. Records authorship on the DHT.
+
+```
+AnyLinkableHash (author) ──AuthorToFileMetadata──> FileMetadata action hash
+```
+
+- **Base:** Any linkable hash representing the author — typically an `AgentPubKey`, but can be a profile entry hash or other identity anchor defined by the consuming hApp.
+- **Target:** The `FileMetadata` action hash (original, stable identifier).
+- Created at file creation time. Never deleted — authorship is permanent.
+- Enables querying all files created by a given identity via `get_links(author_hash, AuthorToFileMetadata)`.
 
 ---
 
@@ -167,7 +183,7 @@ When `update_file()` is called:
 
 1. Retrieve current `FileMetadata` (following any existing version chain to latest)
 2. Create new chunks for the new content via chunk layer
-3. Create a new `FileMetadata` entry with updated `last_modified`, `size`, `chunks_hashes`
+3. Create a new `FileMetadata` entry with updated `size`, `chunks_hashes`
 4. Create a `FileMetaDataUpdate` link: original hash → new hash
 5. Mark old chunks as deleted (they are superseded)
 6. Return the new `FileOutput`
@@ -241,6 +257,72 @@ In this model:
 - Chunks are deduplicated across all three applications automatically
 
 Alternatively, each application can embed both layers in its own DNA (no sharing). This is simpler to deploy and appropriate when cross-application file deduplication is not a priority.
+
+---
+
+## Testing Architecture
+
+Two frameworks serve distinct roles in the test pyramid.
+
+### Sweettest — Rust In-Process Tests
+
+`holochain::sweettest` is a module inside the `holochain` crate (not a separate dependency). It creates conductors in-memory, installs DNA files, and calls zome functions directly from Rust.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Test Process (cargo test)                          │
+│                                                     │
+│  SweetConductor (in-memory conductor)               │
+│    └── SweetApp                                     │
+│          └── SweetCell (agent + DNA pair)           │
+│                └── call(&cell.zome("name"), fn, ...) │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key types:**
+- `SweetConductor` — in-memory conductor, created per test or shared across tests
+- `SweetDnaFile` — wraps compiled WASM into a DNA for installation
+- `SweetApp` — installed hApp within a conductor
+- `SweetCell` — cell instance for one agent+DNA pair; used as the target for `call()`
+- `SweetAgents` — manages agent keypairs for multi-agent tests
+
+**Strengths:** Full Rust type safety, fast execution, no external process, inline zomes supported for isolated unit tests. Direct access to validation errors as Rust types rather than serialized JSON.
+
+**Limitation:** Cannot test real WebSocket signal delivery to a TypeScript client.
+
+### Tryorama — TypeScript Scenario Tests
+
+`@holochain/tryorama` launches a real Holochain conductor process and connects via WebSocket (TryCP protocol). Tests are written in TypeScript with vitest.
+
+```
+┌─────────────────────┐    WebSocket/TryCP    ┌──────────────────────┐
+│  Test Process       │ ◄──────────────────── │  Holochain Conductor  │
+│  (vitest / Node)    │                       │  (real process)       │
+│                     │                       │  File system hApp     │
+│  Alice cell         │                       │  installed            │
+│  Bob cell           │                       │                       │
+└─────────────────────┘                       └──────────────────────┘
+```
+
+**Strengths:** Tests the full stack including conductor, signal emission, and multi-agent DHT gossip. The test environment mirrors real production usage from a TypeScript frontend.
+
+**Limitation:** Requires a compiled `.happ` file before tests run; slower than sweettest for tight Rust-only loops.
+
+### When to Use Each
+
+| Scenario | Framework |
+|----------|-----------|
+| Validation rule logic | sweettest |
+| Entry CRUD operations | sweettest |
+| Path conversion utilities | sweettest |
+| Version chain traversal | sweettest |
+| Signal emission (real conductor) | tryorama |
+| Multi-agent DHT behavior | tryorama |
+| TypeScript client integration | tryorama |
+| Fast CI feedback on Rust changes | sweettest |
+| End-to-end scenario tests | tryorama |
+
+Both frameworks test the same compiled WASM — sweettest loads it in-process, tryorama loads it into a real conductor.
 
 ---
 
