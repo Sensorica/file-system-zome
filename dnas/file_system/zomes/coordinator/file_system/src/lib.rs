@@ -1,3 +1,49 @@
+//! Coordinator zome of the file system: the functions an app calls to store, version, list and
+//! delete files in the DHT.
+//!
+//! Entry and link types come from the `file_system_integrity` crate. Zome name: `file_system`.
+//!
+//! # Model
+//!
+//! - A file is identified by the [`ActionHash`] of the action that created its first
+//!   [`FileMetadata`] version, called the *original hash* below. Every function taking a file
+//!   takes that hash; [`create_file`] returns it as `file_metadata.signed_action.hashed.hash`.
+//! - Content is split into 1 MB [`FileChunk`]s, deduplicated by content.
+//! - A file lives in a directory given as a filesystem path (`/docs/reports`). Paths are
+//!   standardized (`\` becomes `/`, repeated and trailing separators collapse) and mapped to the
+//!   DHT path `root.docs.reports`; see [`files::fs_path_to_dht_path`].
+//! - [`update_file`] writes a new version and links it from the original;
+//!   [`get_file_metadata`] and [`get_file_chunks`] always resolve the newest one.
+//! - [`post_commit`](signals::post_commit) emits a [`signals::Signal`] for every created, updated
+//!   or deleted [`FileMetadata`].
+//!
+//! # Functions
+//!
+//! | Function | Input | Output |
+//! |---|---|---|
+//! | [`create_file`] | [`FileInput`] | [`FileOutput`] |
+//! | [`update_file`] | [`UpdateFileMetadataInput`] | [`FileOutput`] |
+//! | [`delete_file`] | original hash | delete action hashes |
+//! | [`get_file_metadata`] | original hash | latest version, or `None` |
+//! | [`get_file_chunks`] | original hash | chunks of the latest version |
+//! | [`get_files_metadata_by_path_recursively`] | directory path | every file below it |
+//!
+//! # Errors
+//!
+//! Failures reach the caller as `WasmErrorInner::Guest` with one of these messages:
+//!
+//! | Message | Raised by |
+//! |---|---|
+//! | `File already exists` | [`create_file`]: same name already in that directory |
+//! | `File not found` | [`update_file`], [`delete_file`]: unknown or deleted original hash |
+//! | `Expected the original file metadata hash, got a later version` | [`update_file`], [`delete_file`] |
+//! | `Chunk not found` | any function reading a chunk that is not reachable |
+//!
+//! Validation failures from the integrity zome (`File name cannot be empty`, `File path cannot
+//! contain forbidden characters`) surface on [`create_file`] and [`update_file`].
+
+#![warn(missing_docs)]
+
 use file_system_integrity::*;
 use files::*;
 use hdk::prelude::*;
@@ -5,23 +51,41 @@ use hdk::prelude::*;
 pub mod files;
 pub mod signals;
 
-/// A struct representing the input for creating a new file in the File Storage zome.
+/// Input of [`create_file`].
 #[derive(Serialize, Deserialize, SerializedBytes, Debug, Clone, PartialEq)]
 pub struct FileInput {
+    /// File name, without its directory. Must not be empty.
     pub name: String,
+    /// Directory to store the file in, e.g. `/docs`. Standardized before use, so `docs`,
+    /// `\docs\` and `//docs/` all mean `/docs`.
     pub path: String,
+    /// MIME type or extension, stored as given.
     pub file_type: String,
+    /// The file's content. From a JavaScript client, a `Uint8Array`.
     pub content: SerializedBytes,
 }
 
-/// A struct representing the output for creating or updating a file in the File Storage zome.
+/// Output of [`create_file`] and [`update_file`].
 #[derive(Serialize, Deserialize, SerializedBytes, Debug, Clone, PartialEq)]
 pub struct FileOutput {
+    /// The [`FileMetadata`] record just written. For [`create_file`], its action hash is the
+    /// file's original hash.
     pub file_metadata: Record,
+    /// The [`FileChunk`] records of this version, in content order. Repeated content yields the
+    /// same record more than once.
     pub file_chunks: Vec<Record>,
 }
 
-/// Creates a new file in the File Storage zome.
+/// Stores a new file under `path`, chunking its content.
+///
+/// Writes the chunks, a [`FileMetadata`] entry, the directory path entries and a
+/// [`LinkTypes::PathToFileMetaData`] link from the directory to the file.
+///
+/// # Errors
+///
+/// - `File already exists` when a live file with the same name is already visible in that
+///   directory. Two agents creating the same name concurrently can both succeed.
+/// - The integrity zome's validation messages for an empty name or a forbidden path character.
 #[hdk_extern]
 pub fn create_file(file_input: FileInput) -> ExternResult<FileOutput> {
     let already_created_record =
@@ -59,7 +123,14 @@ pub fn create_file(file_input: FileInput) -> ExternResult<FileOutput> {
     Ok(records)
 }
 
-/// Retrieves a list of file chunk records associated with the specified file metadata entry hash.
+/// Returns the chunks of the newest version of a file, in content order.
+///
+/// Concatenating each chunk's bytes gives the file's content. Returns an empty list when the file
+/// does not exist, was deleted, or is empty.
+///
+/// # Errors
+///
+/// `Chunk not found` when the metadata lists a chunk that cannot be fetched.
 #[hdk_extern]
 pub fn get_file_chunks(file_metadata_hash: ActionHash) -> ExternResult<Vec<Record>> {
     let Some(record) = get_file_metadata(file_metadata_hash)? else {
@@ -82,7 +153,14 @@ pub fn get_file_chunks(file_metadata_hash: ActionHash) -> ExternResult<Vec<Recor
     Ok(file_chunks)
 }
 
-/// Retrieves the latest version of a file metadata entry for the specified hash.
+/// Returns the newest version of a file's [`FileMetadata`] record, or `None` once it is deleted.
+///
+/// Follows the [`LinkTypes::FileMetaDataUpdate`] link with the latest timestamp from the original
+/// hash; with no update, the original record is the newest.
+///
+/// # Errors
+///
+/// Network or deserialization errors from the host only.
 #[hdk_extern]
 pub fn get_file_metadata(original_file_metadata_hash: ActionHash) -> ExternResult<Option<Record>> {
     let latest_file_metadata_hash = latest_file_metadata_hash(&original_file_metadata_hash)?
@@ -91,7 +169,15 @@ pub fn get_file_metadata(original_file_metadata_hash: ActionHash) -> ExternResul
     get(latest_file_metadata_hash, GetOptions::default())
 }
 
-/// Retrieves all file metadata entries recursively from the specified directory path.
+/// Lists the newest [`FileMetadata`] record of every file in a directory and all of its
+/// subdirectories.
+///
+/// `path_string` is a filesystem path, standardized like [`FileInput::path`]; `/` lists every
+/// file. Deleted files are not listed. The whole subtree is walked on every call.
+///
+/// # Errors
+///
+/// Network or deserialization errors from the host only.
 #[hdk_extern]
 pub fn get_files_metadata_by_path_recursively(path_string: String) -> ExternResult<Vec<Record>> {
     let path_string = fs_path_to_dht_path(path_string.as_str());
@@ -100,14 +186,27 @@ pub fn get_files_metadata_by_path_recursively(path_string: String) -> ExternResu
     get_files_metadata_recursively(path)
 }
 
-/// A struct representing the input for updating a file's metadata in the File Storage zome.
+/// Input of [`update_file`].
 #[derive(Serialize, Deserialize, SerializedBytes, Debug, Clone, PartialEq)]
 pub struct UpdateFileMetadataInput {
+    /// The file's original hash, never a later version's.
     pub original_file_metadata_hash: ActionHash,
+    /// The complete new content, replacing the previous one.
     pub new_content: SerializedBytes,
 }
 
-/// Updates a file by creating a new version of the file metadata entry and associating it with the previous version.
+/// Replaces a file's content with a new version.
+///
+/// Chunks the new content, writes a new [`FileMetadata`] version as an update of the newest one,
+/// links it from the original with [`LinkTypes::FileMetaDataUpdate`], and deletes the previous
+/// version's chunks except those the new version reuses. `name`, `path`, `file_type`, `author`
+/// and `created` carry over; `size` and `last_modified` are recomputed.
+///
+/// # Errors
+///
+/// - `File not found` for an unknown or deleted hash.
+/// - `Expected the original file metadata hash, got a later version` when given a version hash.
+/// - `Chunk not found` when a previous chunk cannot be fetched.
 #[hdk_extern]
 pub fn update_file(
     update_file_metadata_input: UpdateFileMetadataInput,
@@ -161,7 +260,18 @@ pub fn update_file(
     Ok(records)
 }
 
-/// Deletes a file and all its versions, including the file chunks and its directory index link.
+/// Deletes a file: every version, the chunks of the newest version, and its directory link.
+///
+/// Older versions' chunks were already deleted when they were superseded. After this call the
+/// file leaves [`get_files_metadata_by_path_recursively`], [`get_file_metadata`] returns `None`,
+/// and its name is free again in that directory.
+///
+/// Returns the hashes of every delete and delete-link action written.
+///
+/// # Errors
+///
+/// - `File not found` for an unknown or already deleted hash.
+/// - `Expected the original file metadata hash, got a later version` when given a version hash.
 #[hdk_extern]
 pub fn delete_file(original_file_metadata_hash: ActionHash) -> ExternResult<Vec<ActionHash>> {
     let mut delete_actions: Vec<ActionHash> = Vec::new();
