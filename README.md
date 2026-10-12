@@ -2,6 +2,7 @@
 
 [![test](https://github.com/Sensorica/file-system-zome/actions/workflows/test.yaml/badge.svg)](https://github.com/Sensorica/file-system-zome/actions/workflows/test.yaml)
 ![Holochain 0.7](https://img.shields.io/badge/holochain-0.7.0-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A Holochain building block for organizing files: it stores files in the DHT, indexes them under hierarchical paths, keeps a version chain for every file, and emits signals when files change. It is meant to be embedded in other DNAs so apps do not each rebuild their own file organization.
 
@@ -149,6 +150,10 @@ The target is a **two-layer architecture**: chunk storage delegated to the commu
 - [`documentation/REQUIREMENTS.md`](documentation/REQUIREMENTS.md): requirements and integration context.
 - [`documentation/IDEAS.md`](documentation/IDEAS.md): later capabilities.
 - [`CHANGELOG.md`](CHANGELOG.md): what changed, release by release.
+
+## License
+
+[MIT](LICENSE).
 
 ## Attribution
 
