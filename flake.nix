@@ -1,23 +1,36 @@
 {
-  description = "Template for Holochain app development";
+  description = "Soushi Cloud: Holochain file system zome (0.7)";
 
   inputs = {
-    nixpkgs.follows = "holochain/nixpkgs";
+    # Pin the versioned branch, not `main`. Holonix `main` tracks the current
+    # dev line (0.8 as of August 2026), so `main` silently moves you off 0.7.
+    # `hc scaffold` 0.700.0-rc still emits `ref=main`; change it after scaffolding.
+    holonix.url = "github:holochain/holonix?ref=main-0.7";
 
-    holochain = {
-      url = "github:holochain/holochain";
-      inputs.versions.url = "github:holochain/holochain/?dir=versions/0_1";
-    };
+    nixpkgs.follows = "holonix/nixpkgs";
+    flake-parts.follows = "holonix/flake-parts";
   };
 
-  outputs = inputs@{ ... }:
-    inputs.holochain.inputs.flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = builtins.attrNames inputs.holochain.devShells;
-      perSystem = { config, pkgs, system, ... }: {
-        devShells.default = pkgs.mkShell {
-          inputsFrom = [ inputs.holochain.devShells.${system}.holonix ];
-          packages = [ pkgs.nodejs-18_x ];
-        };
+  outputs = inputs@{ flake-parts, ... }: flake-parts.lib.mkFlake { inherit inputs; } {
+    systems = builtins.attrNames inputs.holonix.devShells;
+    perSystem = { inputs', pkgs, ... }: {
+      formatter = pkgs.nixpkgs-fmt;
+
+      devShells.default = pkgs.mkShell {
+        inputsFrom = [ inputs'.holonix.devShells.default ];
+
+        packages = (with pkgs; [
+          nodejs_24
+          binaryen
+          # One of the holochain crate's build dependencies needs perl on PATH.
+          # Only required if you build Sweettest suites; harmless otherwise.
+          perl
+        ]);
+
+        shellHook = ''
+          export PS1='\[\033[1;34m\][holonix:\w]\$\[\033[0m\] '
+        '';
       };
     };
+  };
 }
