@@ -6,12 +6,18 @@ opt-level = "z"
 
 [workspace]
 members = ["dnas/*/zomes/coordinator/*", "dnas/*/zomes/integrity/*"]
+resolver = "2"
 
 [workspace.dependencies]
-hdi = "=0.2.2"
-hdk = "=0.1.2"
-holochain_integrity_types = "=0.1.2"
-serde = "1"
+hdi = "=0.8.0"
+hdk = "=0.7.0"
+holochain_serialized_bytes = "=0.0.57"
+serde = "1.0"
+tokio = "1.49"
+
+[workspace.dependencies.holochain]
+default-features = false
+version = "0.7.0"
 
 [workspace.dependencies.file_system]
 path = "dnas/file_system/zomes/coordinator/file_system"

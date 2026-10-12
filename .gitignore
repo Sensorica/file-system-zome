@@ -15,3 +15,6 @@
 # PAI
 /.claude
 /Plans
+
+# worktrees
+/.worktrees/

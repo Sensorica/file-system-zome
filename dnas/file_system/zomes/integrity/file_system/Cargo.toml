@@ -9,6 +9,5 @@ name = "file_system_integrity"
 
 [dependencies]
 hdi = { workspace = true }
-holochain_integrity_types = { workspace = true }
-
 serde = { workspace = true }
+holochain_serialized_bytes = { workspace = true }

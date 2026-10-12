@@ -96,10 +96,10 @@ The zome must be embeddable in other DNAs without modification.
 
 ### NFR-1: Modern HDK Compatibility
 
-The zome must target Holochain 0.6.x (HDK/HDI current stable).
+The zome must target Holochain 0.7.x (`hdk 0.7.0`, `hdi 0.8.0`, current stable).
 
-- The current implementation uses HDI v0.2.2 / HDK v0.1.2 and must be updated
-- The updated zome must pass all existing tests against the new HDK version
+- Met on 2026-10-12: ported from HDK v0.1.2 / HDI v0.2.2 (see `CHANGELOG.md`)
+- Every scenario of the former Tryorama suite has a passing Sweettest equivalent
 
 ### NFR-2: Community Zome Integration
 
@@ -120,14 +120,13 @@ Public functions must be tested at two levels using complementary frameworks.
 - Use for: validation rules, entry creation/update/delete logic, version chain traversal, path conversion
 - Located in `dnas/file_system/zomes/coordinator/file_system/tests/` (Rust `#[tokio::test]` functions)
 
-**Scenario-level tests (tryorama):** TypeScript integration tests using `@holochain/tryorama`.
+**Client-level tests (planned):** TypeScript tests using `@holochain/client` against a running conductor.
 
-- Tests run two agents (Alice and Bob) against a real conductor over WebSocket
-- Coverage must include: create, update, delete, path traversal, version chain, signals
-- Known edge cases: empty file name, forbidden path characters, concurrent agents
-- Located in `tests/` (TypeScript with vitest)
+- Tryorama, the former choice, has no Holochain 0.7 release, so this level waits on a client-based harness
+- Coverage must include: signals delivered over WebSocket, and calls made with the client's msgpack encoding
+- Two-agent behaviour (create, update, delete, path traversal, version chain, validation edge cases) is already covered at the Sweettest level with two conductors
 
-Both test suites must pass before any phase is considered complete.
+The Sweettest suite must pass before any phase is considered complete; the client-level suite joins that gate once it exists.
 
 ---
 

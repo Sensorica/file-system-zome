@@ -4,35 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-All commands must be run from inside the Nix shell (`nix-shell` in the root directory).
+Targets Holochain 0.7 (`hdk 0.7.0`, `hdi 0.8.0`). All commands run inside the dev shell: `nix develop` in the repo root.
 
 ```bash
-# Install dependencies (first time)
-npm install
-
-# Build Rust WASM zomes only
-npm run build:zomes
-# Equivalent: RUSTFLAGS='' CARGO_TARGET_DIR=target cargo build --release --target wasm32-unknown-unknown
-
-# Build the full hApp (zomes + pack)
-npm run build:happ
-
-# Run all tests (builds zomes, packs hApp, runs vitest)
-npm test
-
-# Run tests within the tests/ workspace directly (requires hApp to already be built)
-npm t -w tests
-
-# Start a 2-agent network with UI
-npm start
-
-# Package the web hApp for distribution
-npm run package
+npm install            # first time
+npm run build:zomes    # wasm only; needs RUSTFLAGS='--cfg getrandom_backend="custom"' (set by the script)
+npm run build:happ     # wasm + dnas/file_system/workdir/file_system.dna + workdir/soushi-cloud.happ
+npm test               # build:happ, then cargo test (path unit tests + Sweettest)
+npm run doc            # rustdoc, warnings are errors; the coordinator also enforces missing_docs
+npm start              # kitsune2 bootstrap/relay on 127.0.0.1:4433 + 2 conductors (AGENTS=n to change)
 ```
 
-**Run a single test** by passing a test name filter to vitest:
+**Run a single Sweettest scenario** (the DNA bundle must already be built):
 ```bash
-cd tests && npx vitest run --reporter=verbose -t "create file with empty name"
+cargo test -p file_system --test file_system deleted_file_leaves_its_directory_listing
 ```
 
 ## Architecture
@@ -41,13 +26,13 @@ This is a **Holochain application** ("Soushi Cloud") for distributed file storag
 
 ### Zome Structure
 
-- **Integrity zome** (`dnas/file_system/zomes/integrity/file_system/`): Defines entry types, link types, and validation rules. Only the HDI (Holochain Deterministic Integrity) crate is available here — no side effects.
+- **Integrity zome** (`dnas/file_system/zomes/integrity/file_system/`): Defines entry types, link types, and validation rules. Only the HDI (Holochain Deterministic Integrity) crate is available here, so no side effects.
 - **Coordinator zome** (`dnas/file_system/zomes/coordinator/file_system/`): Handles all CRUD logic, path resolution, file chunking, and signals. Uses the full HDK.
 
 ### Entry & Link Types (defined in integrity zome)
 
 - `FileMetadata`: stores file name, author pubkey, path, timestamps, size, file_type, and `chunks_hashes: Vec<EntryHash>`
-- `FileChunk`: a raw byte array (`SerializedBytes`) — files are split into 1 MB chunks
+- `FileChunk`: a raw byte array (`SerializedBytes`); files are split into 1 MB chunks
 
 Link types:
 - `PathFileSystem`: typed path anchors for the file system tree (uses Holochain's `Path` system)
@@ -76,11 +61,9 @@ The `post_commit` hook emits signals after every committed action:
 - `FileMetadataCreated` / `FileMetadataUpdated` / `FileMetadataDeleted`
 - Only emits for `FileMetadata` entries, not chunks
 
-### Tests (`tests/`)
+### Tests
 
-TypeScript integration tests using `@holochain/tryorama` and `vitest`. Tests run two agents (Alice and Bob) with a shared DHT. The compiled hApp must exist at `../workdir/soushi-cloud.happ` before tests run (handled automatically by `npm test`).
-
-Helper functions in `tests/src/file_system/common.ts` wrap all zome calls.
+Sweettest (Rust, in-process conductors) in `dnas/file_system/zomes/coordinator/file_system/tests/file_system.rs`. Each scenario runs Alice and Bob on two conductors sharing one DNA, loaded from `dnas/file_system/workdir/file_system.dna`, and uses `await_consistency` before cross-agent reads. Path conversion unit tests live in `files.rs`. Tryorama is not used: it has no Holochain 0.7 release.
 
 ### Build Artifacts
 

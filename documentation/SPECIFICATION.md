@@ -6,7 +6,7 @@ Evolve this project from a proof-of-concept using outdated HDK into a production
 
 ## Target State
 
-- Compiles against Holochain 0.6.x (current stable HDK/HDI)
+- Compiles against Holochain 0.7.x (current stable HDK/HDI)
 - Delegates chunk operations to `holochain-open-dev/file-storage`
 - All known bugs fixed
 - All existing tests passing
@@ -15,6 +15,8 @@ Evolve this project from a proof-of-concept using outdated HDK into a production
 ---
 
 ## Phase 1 — HDK Migration
+
+**Status:** done on 2026-10-12, targeting Holochain 0.7 rather than the 0.4.x/0.6.x named below (`hdk 0.7.0`, `hdi 0.8.0`). Tests moved to Sweettest because Tryorama has no 0.7 release. The steps below are kept as the original plan.
 
 **Objective:** Get the project compiling against modern Holochain.
 
@@ -120,6 +122,8 @@ Once chunk operations are fully delegated, remove `FileChunk` from this project'
 ---
 
 ## Phase 3 — Bug Fixes
+
+**Status:** done on 2026-10-12, both bugs fixed; the path link cleanup is covered by `deleted_file_leaves_its_directory_listing`. Fixed on the way: chunks left behind when deleting a never-updated file, updates failing when a chunk is reused, and update/delete accepting a later version's hash.
 
 **Objective:** Fix all known issues identified in the current implementation.
 
@@ -294,6 +298,8 @@ cargo test --manifest-path dnas/file_system/zomes/coordinator/file_system/Cargo.
 ```
 
 ### Tryorama (TypeScript — scenario-level)
+
+> Superseded: Tryorama has no Holochain 0.7 release. The two-agent scenarios now run in Sweettest on two conductors; the TypeScript level returns as a `@holochain/client` suite (see ARCHITECTURE.md § Client-level tests).
 
 `@holochain/tryorama` runs two agents (Alice and Bob) against a real conductor over WebSocket. It tests user interaction flows, signal emission, and multi-agent DHT behavior.
 

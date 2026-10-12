@@ -1,40 +1,50 @@
-//! This module is responsible for managing and emitting signals related to actions performed on file metadata.
+//! Local signals telling an open app that a file changed, so it can refresh without polling.
+//!
+//! Signals go to the clients connected to the agent's own conductor, after the agent's own
+//! commits; they are not sent to other peers. Only [`FileMetadata`] actions emit; chunk and link
+//! actions are silent. Serialized with `serde(tag = "type")`, so a JavaScript client receives
+//! `{ type: "FileMetadataCreated", action, app_entry }` and so on.
 
 use file_system_integrity::*;
 use hdk::prelude::*;
 
-/// This enum represents the possible signals that can be emitted by the Zome.
-/// These signals correspond to various actions performed on file metadata.
+/// A change to a file, emitted once per committed [`FileMetadata`] action.
+///
+/// One [`delete_file`](crate::delete_file) call emits one `FileMetadataDeleted` per version it
+/// deletes.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Signal {
-    /// Signal that is emitted when file metadata is created.
+    /// A file was created by [`create_file`](crate::create_file).
     FileMetadataCreated {
-        /// The hashed action signed by the agent.
+        /// The create action; its hash is the file's original hash.
         action: SignedActionHashed,
-        /// The entry type involved in the action.
+        /// The new [`EntryTypes::FileMetadata`].
         app_entry: EntryTypes,
     },
-    /// Signal that is emitted when file metadata is updated.
+    /// A file got a new version from [`update_file`](crate::update_file).
     FileMetadataUpdated {
-        /// The hashed action signed by the agent.
+        /// The update action that wrote the new version.
         action: SignedActionHashed,
-        /// The entry type involved in the action.
+        /// The new version's [`EntryTypes::FileMetadata`].
         app_entry: EntryTypes,
-        /// The original entry type before the action was performed.
+        /// The version this one replaces (the previous newest, not necessarily the first).
         original_app_entry: EntryTypes,
     },
-    /// Signal that is emitted when file metadata is deleted.
+    /// A version of a file was deleted by [`delete_file`](crate::delete_file).
     FileMetadataDeleted {
-        /// The hashed action signed by the agent.
+        /// The delete action.
         action: SignedActionHashed,
-        /// The original entry type before the action was performed.
+        /// The [`EntryTypes::FileMetadata`] version that was deleted.
         original_app_entry: EntryTypes,
     },
 }
 
-/// This function is triggered after the agent commits an action.
-/// It goes through each committed action and sends the appropriate signal.
+/// Called by the conductor after each successful commit; emits a [`Signal`] for every
+/// [`FileMetadata`] action in it.
+///
+/// Infallible by contract: a failure to build or emit one signal is logged and the others are
+/// still sent.
 #[hdk_extern(infallible)]
 pub fn post_commit(committed_actions: Vec<SignedActionHashed>) {
     for action in committed_actions {
@@ -44,42 +54,41 @@ pub fn post_commit(committed_actions: Vec<SignedActionHashed>) {
     }
 }
 
-/// This function is triggered after the agent commits an action.
-/// It goes through each committed action and sends the appropriate signal.
+/// Emits the [`Signal`] matching one committed action, or nothing if it is not about a file.
 fn signal_action(action: SignedActionHashed) -> ExternResult<()> {
-    match action.hashed.content.clone() {
-        Action::Create(_create) => {
-            let entry = get_entry_for_action(&action.hashed.hash)?;
-            if let Some(EntryTypes::FileMetadata(_)) = entry {
-                let signal = Signal::FileMetadataCreated {
-                    action,
-                    app_entry: entry.unwrap(),
-                };
-                emit_signal(&signal)?;
+    match &action.hashed.content.clone().data {
+        ActionData::Create(_create) => {
+            if let Some(app_entry @ EntryTypes::FileMetadata(_)) =
+                get_entry_for_action(&action.hashed.hash)?
+            {
+                emit_signal(&Signal::FileMetadataCreated { action, app_entry })?;
             }
             Ok(())
         }
-        Action::Update(update) => {
-            let entry = get_entry_for_action(&action.hashed.hash)?;
-            let original_entry = get_entry_for_action(&update.original_action_address)?;
-            if let Some(EntryTypes::FileMetadata(_)) = entry {
-                let signal = Signal::FileMetadataUpdated {
-                    action,
-                    app_entry: entry.unwrap(),
-                    original_app_entry: original_entry.unwrap(),
-                };
-                emit_signal(&signal)?;
+        ActionData::Update(update) => {
+            if let Some(app_entry @ EntryTypes::FileMetadata(_)) =
+                get_entry_for_action(&action.hashed.hash)?
+            {
+                if let Some(original_app_entry) =
+                    get_entry_for_action(&update.original_action_address)?
+                {
+                    emit_signal(&Signal::FileMetadataUpdated {
+                        action,
+                        app_entry,
+                        original_app_entry,
+                    })?;
+                }
             }
             Ok(())
         }
-        Action::Delete(delete) => {
-            let original_entry = get_entry_for_action(&delete.deletes_address)?;
-            if let Some(EntryTypes::FileMetadata(_)) = original_entry {
-                let signal = Signal::FileMetadataDeleted {
+        ActionData::Delete(delete) => {
+            if let Some(original_app_entry @ EntryTypes::FileMetadata(_)) =
+                get_entry_for_action(&delete.deletes_address)?
+            {
+                emit_signal(&Signal::FileMetadataDeleted {
                     action,
-                    original_app_entry: original_entry.unwrap(),
-                };
-                emit_signal(&signal)?;
+                    original_app_entry,
+                })?;
             }
             Ok(())
         }
@@ -87,8 +96,8 @@ fn signal_action(action: SignedActionHashed) -> ExternResult<()> {
     }
 }
 
-/// This helper function retrieves the entry corresponding to a given action.
-/// It fetches the action's details and retrieves the corresponding entry type.
+/// Fetches the app entry written by `action_hash`, or `None` if the action carries no entry of
+/// this zome.
 fn get_entry_for_action(action_hash: &ActionHash) -> ExternResult<Option<EntryTypes>> {
     let record = match get_details(action_hash.clone(), GetOptions::default())? {
         Some(Details::Record(record_details)) => record_details.record,
@@ -112,9 +121,5 @@ fn get_entry_for_action(action_hash: &ActionHash) -> ExternResult<Option<EntryTy
             return Ok(None);
         }
     };
-    Ok(EntryTypes::deserialize_from_type(
-        zome_index.clone(),
-        entry_index.clone(),
-        entry,
-    )?)
+    EntryTypes::deserialize_from_type(*zome_index, *entry_index, entry)
 }

@@ -8,10 +8,13 @@ crate-type = ["cdylib", "rlib"]
 name = "file_system"
 
 [dependencies]
-regex = "1.8.1"
 hdk = { workspace = true }
-holochain_integrity_types = { workspace = true }
-
 serde = { workspace = true }
+holochain_serialized_bytes = { workspace = true }
+regex = "1"
 
 file_system_integrity = { workspace = true }
+
+[dev-dependencies]
+holochain = { workspace = true, features = ["wasmer-sys-cranelift", "test_utils"] }
+tokio = { workspace = true }
