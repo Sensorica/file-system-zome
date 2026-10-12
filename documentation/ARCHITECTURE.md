@@ -290,12 +290,14 @@ Two frameworks serve distinct roles in the test pyramid.
 
 **Limitation:** Cannot test real WebSocket signal delivery to a TypeScript client.
 
-### Tryorama — TypeScript Scenario Tests
+Multi-agent scenarios run on a `SweetConductorBatch` (one conductor per agent) with `await_consistency` before cross-agent reads, which is how the current suite exercises DHT propagation between Alice and Bob.
 
-`@holochain/tryorama` launches a real Holochain conductor process and connects via WebSocket (TryCP protocol). Tests are written in TypeScript with vitest.
+### Client-level tests (planned)
+
+`@holochain/tryorama` filled this role on Holochain 0.1 but has no 0.7 release. The replacement is a TypeScript suite using `@holochain/client` against conductors started with `hc sandbox` (as `npm start` does).
 
 ```
-┌─────────────────────┐    WebSocket/TryCP    ┌──────────────────────┐
+┌─────────────────────┐   WebSocket (client)  ┌──────────────────────┐
 │  Test Process       │ ◄──────────────────── │  Holochain Conductor  │
 │  (vitest / Node)    │                       │  (real process)       │
 │                     │                       │  File system hApp     │
@@ -316,13 +318,13 @@ Two frameworks serve distinct roles in the test pyramid.
 | Entry CRUD operations | sweettest |
 | Path conversion utilities | sweettest |
 | Version chain traversal | sweettest |
-| Signal emission (real conductor) | tryorama |
-| Multi-agent DHT behavior | tryorama |
-| TypeScript client integration | tryorama |
+| Signal emission (real conductor) | client-level (planned) |
+| Multi-agent DHT behavior | sweettest (two conductors) |
+| TypeScript client integration | client-level (planned) |
 | Fast CI feedback on Rust changes | sweettest |
-| End-to-end scenario tests | tryorama |
+| End-to-end scenario tests | client-level (planned) |
 
-Both frameworks test the same compiled WASM — sweettest loads it in-process, tryorama loads it into a real conductor.
+Both levels test the same compiled WASM: sweettest loads it in-process, the client level loads it into a running conductor.
 
 ---
 
@@ -330,7 +332,8 @@ Both frameworks test the same compiled WASM — sweettest loads it in-process, t
 
 | Issue | Location | Impact | Fix |
 |-------|----------|--------|-----|
-| Path links not cleaned up on delete | `coordinator/lib.rs:delete_file()` | `PathToFileMetaData` links remain after deletion; deleted files still appear in directory listings | Delete the link in `delete_file()` |
-| Debug `println!` in path conversion | `coordinator/files.rs:standardize_fs_path()` | Noisy WASM output | Remove the `println!` |
-| HDK v0.1.2 / HDI v0.2.2 | `Cargo.toml` | Cannot compile against current Holochain | Update to current stable |
-| No file move/rename | — | Cannot reorganize files without delete+recreate | Add `move_file()` function |
+| Shared chunks | `coordinator/files.rs:create_file_chunk()` | Chunks are deduplicated by content; deleting or updating one file deletes a chunk another file with identical content still references | Phase 2 (community chunk layer) or per-file chunk ownership |
+| No ownership rules | `integrity/lib.rs:validate()` | Any agent can update or delete any file; `name`, `path`, `file_type` are not enforced as immutable | Author check and field immutability in validation |
+| No file move/rename | n/a | Cannot reorganize files without delete+recreate | Add `move_file()` function |
+
+Fixed on 2026-10-12 (see `CHANGELOG.md`): path links left behind on delete, debug `println!` in path conversion, chunks of never-updated files left behind on delete, and the HDK v0.1.2 / HDI v0.2.2 pin.
