@@ -47,39 +47,39 @@ pub fn post_commit(committed_actions: Vec<SignedActionHashed>) {
 /// This function is triggered after the agent commits an action.
 /// It goes through each committed action and sends the appropriate signal.
 fn signal_action(action: SignedActionHashed) -> ExternResult<()> {
-    match action.hashed.content.clone() {
-        Action::Create(_create) => {
-            let entry = get_entry_for_action(&action.hashed.hash)?;
-            if let Some(EntryTypes::FileMetadata(_)) = entry {
-                let signal = Signal::FileMetadataCreated {
-                    action,
-                    app_entry: entry.unwrap(),
-                };
-                emit_signal(&signal)?;
+    match &action.hashed.content.clone().data {
+        ActionData::Create(_create) => {
+            if let Some(app_entry @ EntryTypes::FileMetadata(_)) =
+                get_entry_for_action(&action.hashed.hash)?
+            {
+                emit_signal(&Signal::FileMetadataCreated { action, app_entry })?;
             }
             Ok(())
         }
-        Action::Update(update) => {
-            let entry = get_entry_for_action(&action.hashed.hash)?;
-            let original_entry = get_entry_for_action(&update.original_action_address)?;
-            if let Some(EntryTypes::FileMetadata(_)) = entry {
-                let signal = Signal::FileMetadataUpdated {
-                    action,
-                    app_entry: entry.unwrap(),
-                    original_app_entry: original_entry.unwrap(),
-                };
-                emit_signal(&signal)?;
+        ActionData::Update(update) => {
+            if let Some(app_entry @ EntryTypes::FileMetadata(_)) =
+                get_entry_for_action(&action.hashed.hash)?
+            {
+                if let Some(original_app_entry) =
+                    get_entry_for_action(&update.original_action_address)?
+                {
+                    emit_signal(&Signal::FileMetadataUpdated {
+                        action,
+                        app_entry,
+                        original_app_entry,
+                    })?;
+                }
             }
             Ok(())
         }
-        Action::Delete(delete) => {
-            let original_entry = get_entry_for_action(&delete.deletes_address)?;
-            if let Some(EntryTypes::FileMetadata(_)) = original_entry {
-                let signal = Signal::FileMetadataDeleted {
+        ActionData::Delete(delete) => {
+            if let Some(original_app_entry @ EntryTypes::FileMetadata(_)) =
+                get_entry_for_action(&delete.deletes_address)?
+            {
+                emit_signal(&Signal::FileMetadataDeleted {
                     action,
-                    original_app_entry: original_entry.unwrap(),
-                };
-                emit_signal(&signal)?;
+                    original_app_entry,
+                })?;
             }
             Ok(())
         }
@@ -112,9 +112,5 @@ fn get_entry_for_action(action_hash: &ActionHash) -> ExternResult<Option<EntryTy
             return Ok(None);
         }
     };
-    Ok(EntryTypes::deserialize_from_type(
-        zome_index.clone(),
-        entry_index.clone(),
-        entry,
-    )?)
+    EntryTypes::deserialize_from_type(*zome_index, *entry_index, entry)
 }

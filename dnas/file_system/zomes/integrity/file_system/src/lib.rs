@@ -15,7 +15,7 @@ pub enum LinkTypes {
 /// Defines entry types for the integrity zome.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[hdk_entry_defs]
+#[hdk_entry_types]
 #[unit_enum(UnitEntryTypes)]
 pub enum EntryTypes {
     FileMetadata(FileMetadata),
@@ -44,20 +44,16 @@ pub struct FileMetadata {
 /// Validates the provided `Op` to ensure the entry and link types adhere to the defined constraints.
 #[hdk_extern]
 pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
-    if let FlatOp::StoreEntry(store_entry) = op.flattened::<EntryTypes, LinkTypes>()? {
-        match store_entry {
-            OpEntry::CreateEntry { app_entry, .. } | OpEntry::UpdateEntry { app_entry, .. } => {
-                match app_entry {
-                    EntryTypes::FileMetadata(file_metadata) => {
-                        return validate_create_file_metadata(file_metadata);
-                    }
-                    EntryTypes::FileChunk(_) => return Ok(ValidateCallbackResult::Valid),
-                }
+    match op.flattened::<EntryTypes, LinkTypes>()? {
+        FlatOp::CreateEntry(OpEntry::CreateEntry { app_entry, .. })
+        | FlatOp::CreateEntry(OpEntry::UpdateEntry { app_entry, .. }) => match app_entry {
+            EntryTypes::FileMetadata(file_metadata) => {
+                validate_create_file_metadata(file_metadata)
             }
-            _ => (),
-        }
+            EntryTypes::FileChunk(_) => Ok(ValidateCallbackResult::Valid),
+        },
+        _ => Ok(ValidateCallbackResult::Valid),
     }
-    Ok(ValidateCallbackResult::Valid)
 }
 
 /// Validates the `FileMetadata` for its creation or update, ensuring the name and path meet the defined constraints.

@@ -15,13 +15,12 @@ pub fn get_files_metadata_recursively(path: Path) -> ExternResult<Vec<Record>> {
     let typed_path = path.clone().typed(LinkTypes::PathFileSystem)?;
 
     let files_links = get_links(
-        typed_path.path_entry_hash()?,
-        LinkTypes::PathToFileMetaData,
-        None,
+        LinkQuery::try_new(typed_path.path_entry_hash()?, LinkTypes::PathToFileMetaData)?,
+        GetStrategy::default(),
     )?;
 
     for link in files_links {
-        let file_metadata = get_file_metadata(ActionHash::from(link.clone().target))?;
+        let file_metadata = get_file_metadata(link_target_action_hash(&link)?)?;
         if let Some(file_metadata) = file_metadata {
             files.push(file_metadata);
         }
@@ -89,13 +88,12 @@ pub fn get_file_metadata_by_path_and_name(path: String, name: String) -> ExternR
     let path = Path::from(file_path);
     let typed_path = path.typed(LinkTypes::PathFileSystem)?;
     let files_links = get_links(
-        typed_path.path_entry_hash()?,
-        LinkTypes::PathToFileMetaData,
-        None,
+        LinkQuery::try_new(typed_path.path_entry_hash()?, LinkTypes::PathToFileMetaData)?,
+        GetStrategy::default(),
     )?;
 
     for link in files_links {
-        let file_metadata_record = get_file_metadata(ActionHash::from(link.clone().target))?
+        let file_metadata_record = get_file_metadata(link_target_action_hash(&link)?)?
             .ok_or(wasm_error!(WasmErrorInner::Guest(String::from(
                 "Could not find the newly created file metadata"
             ))))?;
@@ -114,11 +112,8 @@ pub fn update_file_metadata(
     previous_file_metadata_hash: Option<ActionHash>,
     file_metadata: FileMetadata,
 ) -> ExternResult<Record> {
-    let file_metadata_hash = if previous_file_metadata_hash.is_some() {
-        previous_file_metadata_hash.unwrap()
-    } else {
-        original_file_metadata_hash.clone()
-    };
+    let file_metadata_hash =
+        previous_file_metadata_hash.unwrap_or_else(|| original_file_metadata_hash.clone());
     let updated_metadata_hash = update_entry(file_metadata_hash, &file_metadata.clone())?;
 
     create_link(
@@ -133,6 +128,33 @@ pub fn update_file_metadata(
     ))?;
 
     Ok(record)
+}
+
+/// Returns the target of a link as an `ActionHash`, failing if the link points at another hash type.
+pub fn link_target_action_hash(link: &Link) -> ExternResult<ActionHash> {
+    link.target
+        .clone()
+        .into_action_hash()
+        .ok_or(wasm_error!(WasmErrorInner::Guest(String::from(
+            "Link target is not an action hash"
+        ))))
+}
+
+/// Deletes the `PathToFileMetaData` link that indexes a file under its directory path.
+pub fn delete_path_link(fs_path: &str, original_file_metadata_hash: &ActionHash) -> ExternResult<Vec<ActionHash>> {
+    let typed_path = Path::from(fs_path_to_dht_path(fs_path)).typed(LinkTypes::PathFileSystem)?;
+    let links = get_links(
+        LinkQuery::try_new(typed_path.path_entry_hash()?, LinkTypes::PathToFileMetaData)?,
+        GetStrategy::default(),
+    )?;
+
+    let mut deleted = Vec::new();
+    for link in links {
+        if link.target.clone().into_action_hash().as_ref() == Some(original_file_metadata_hash) {
+            deleted.push(delete_link(link.create_link_hash, GetOptions::default())?);
+        }
+    }
+    Ok(deleted)
 }
 
 /// Splits the file content into chunks and returns a vector of their hashes.
@@ -175,8 +197,6 @@ pub fn standardize_fs_path(path: &str) -> String {
     let re = Regex::new(r"[/]+").unwrap();
     let path = re.replace_all(&path, "/").to_string();
     let mut path = PathBuf::from(path);
-
-    println!("path: {:?}", path);
 
     let main_separator = std::path::MAIN_SEPARATOR.to_string();
 

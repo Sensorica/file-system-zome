@@ -47,10 +47,10 @@ pub fn create_file(file_input: FileInput) -> ExternResult<FileOutput> {
     };
 
     let metadata_record = create_file_metadata(file_metadata)?;
-    let chunks_records: Vec<Record> = chunks_hashes
+    let chunks_records = chunks_hashes
         .iter()
-        .map(|chunk_hash| get_file_chunk(chunk_hash.clone()).unwrap())
-        .collect();
+        .map(|chunk_hash| get_file_chunk(chunk_hash.clone()))
+        .collect::<ExternResult<Vec<Record>>>()?;
     let records = FileOutput {
         file_metadata: metadata_record,
         file_chunks: chunks_records,
@@ -62,12 +62,11 @@ pub fn create_file(file_input: FileInput) -> ExternResult<FileOutput> {
 /// Retrieves a list of file chunk records associated with the specified file metadata entry hash.
 #[hdk_extern]
 pub fn get_file_chunks(file_metadata_hash: ActionHash) -> ExternResult<Vec<Record>> {
-    let record_option = get_file_metadata(file_metadata_hash)?;
-    if record_option.is_none() {
+    let Some(record) = get_file_metadata(file_metadata_hash)? else {
         return Ok(Vec::new());
-    }
+    };
 
-    let file_metadata: FileMetadata = record_option.unwrap().try_into()?;
+    let file_metadata: FileMetadata = record.try_into()?;
 
     let mut file_chunks = Vec::new();
 
@@ -86,20 +85,8 @@ pub fn get_file_chunks(file_metadata_hash: ActionHash) -> ExternResult<Vec<Recor
 /// Retrieves the latest version of a file metadata entry for the specified hash.
 #[hdk_extern]
 pub fn get_file_metadata(original_file_metadata_hash: ActionHash) -> ExternResult<Option<Record>> {
-    let links = get_links(
-        original_file_metadata_hash.clone(),
-        LinkTypes::FileMetaDataUpdate,
-        None,
-    )?;
-
-    let latest_link = links
-        .into_iter()
-        .max_by(|link_a, link_b| link_a.timestamp.cmp(&link_b.timestamp));
-
-    let latest_file_metadata_hash = match latest_link {
-        Some(link) => ActionHash::from(link.target.clone()),
-        None => original_file_metadata_hash.clone(),
-    };
+    let latest_file_metadata_hash = latest_file_metadata_hash(&original_file_metadata_hash)?
+        .unwrap_or(original_file_metadata_hash);
 
     get(latest_file_metadata_hash, GetOptions::default())
 }
@@ -108,7 +95,6 @@ pub fn get_file_metadata(original_file_metadata_hash: ActionHash) -> ExternResul
 #[hdk_extern]
 pub fn get_files_metadata_by_path_recursively(path_string: String) -> ExternResult<Vec<Record>> {
     let path_string = fs_path_to_dht_path(path_string.as_str());
-    warn!("path_string: {:?}", path_string);
     let path = Path::from(path_string);
 
     get_files_metadata_recursively(path)
@@ -129,19 +115,7 @@ pub fn update_file(
     let original_file_metadata_hash = update_file_metadata_input.original_file_metadata_hash;
     let new_content = update_file_metadata_input.new_content.bytes();
 
-    let all_update_links = get_links(
-        original_file_metadata_hash.clone(),
-        LinkTypes::FileMetaDataUpdate,
-        None,
-    )?;
-    let latest_link = all_update_links
-        .into_iter()
-        .max_by(|link_a, link_b| link_a.timestamp.cmp(&link_b.timestamp));
-
-    let previous_file_metadata_hash = match latest_link {
-        Some(link) => Some(ActionHash::from(link.target.clone())),
-        None => None,
-    };
+    let previous_file_metadata_hash = latest_file_metadata_hash(&original_file_metadata_hash)?;
 
     let chunks_hashes = chunk_file(new_content.to_vec())?;
     let now = sys_time()?;
@@ -168,10 +142,10 @@ pub fn update_file(
         file_metadata,
     )?;
 
-    let chunks_records: Vec<Record> = chunks_hashes
+    let chunks_records = chunks_hashes
         .iter()
-        .map(|chunk_hash| get_file_chunk(chunk_hash.clone()).unwrap())
-        .collect();
+        .map(|chunk_hash| get_file_chunk(chunk_hash.clone()))
+        .collect::<ExternResult<Vec<Record>>>()?;
     let records = FileOutput {
         file_metadata: updated_metadata_record,
         file_chunks: chunks_records,
@@ -180,27 +154,36 @@ pub fn update_file(
     Ok(records)
 }
 
-/// Deletes a file and all its versions, including the file chunks.
+/// Deletes a file and all its versions, including the file chunks and its directory index link.
 #[hdk_extern]
 pub fn delete_file(original_file_metadata_hash: ActionHash) -> ExternResult<Vec<ActionHash>> {
     let mut delete_actions: Vec<ActionHash> = Vec::new();
-    let mut update_links = get_links(
-        original_file_metadata_hash.clone(),
-        LinkTypes::FileMetaDataUpdate,
-        None,
+
+    // `path` never changes across versions, so the original entry tells us where the file is indexed.
+    let original_record = get(original_file_metadata_hash.clone(), GetOptions::default())?.ok_or(
+        wasm_error!(WasmErrorInner::Guest(String::from("File not found"))),
     )?;
+    let original_file_metadata = FileMetadata::try_from(original_record)?;
+    delete_actions.extend(delete_path_link(
+        &original_file_metadata.path,
+        &original_file_metadata_hash,
+    )?);
 
-    let binding = update_links.clone();
-    let latest_link = binding
-        .iter()
-        .max_by(|link_a, link_b| link_a.timestamp.cmp(&link_b.timestamp));
+    let update_links = get_links(
+        LinkQuery::try_new(
+            original_file_metadata_hash.clone(),
+            LinkTypes::FileMetaDataUpdate,
+        )?,
+        GetStrategy::default(),
+    )?;
+    let latest_metadata_hash = latest_file_metadata_hash(&original_file_metadata_hash)?;
 
-    if let Some(latest_link) = latest_link {
-        let latest_metadata_hash = ActionHash::from(latest_link.clone().target);
-
-        update_links.retain(|link| link.target != latest_metadata_hash.clone().into());
+    if let Some(latest_metadata_hash) = latest_metadata_hash {
         for link in update_links {
-            delete_actions.push(delete_entry(ActionHash::from(link.target))?);
+            let version_hash = link_target_action_hash(&link)?;
+            if version_hash != latest_metadata_hash {
+                delete_actions.push(delete_entry(version_hash)?);
+            }
         }
 
         let file_chunks = get_file_chunks(latest_metadata_hash.clone())?;
@@ -209,9 +192,33 @@ pub fn delete_file(original_file_metadata_hash: ActionHash) -> ExternResult<Vec<
         }
 
         delete_actions.push(delete_entry(latest_metadata_hash)?);
+    } else {
+        let file_chunks = get_file_chunks(original_file_metadata_hash.clone())?;
+        for file_chunk in file_chunks {
+            delete_actions.push(delete_entry(file_chunk.signed_action.hashed.hash)?);
+        }
     }
 
     delete_actions.push(delete_entry(original_file_metadata_hash)?);
 
     Ok(delete_actions)
+}
+
+/// Returns the hash of the most recent version of a file, or `None` if it was never updated.
+fn latest_file_metadata_hash(
+    original_file_metadata_hash: &ActionHash,
+) -> ExternResult<Option<ActionHash>> {
+    let links = get_links(
+        LinkQuery::try_new(
+            original_file_metadata_hash.clone(),
+            LinkTypes::FileMetaDataUpdate,
+        )?,
+        GetStrategy::default(),
+    )?;
+
+    links
+        .into_iter()
+        .max_by(|link_a, link_b| link_a.timestamp.cmp(&link_b.timestamp))
+        .map(|link| link_target_action_hash(&link))
+        .transpose()
 }
