@@ -1919,7 +1919,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "file_system"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "file_system_integrity",
  "hdk",
@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "file_system_integrity"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "hdi",
  "holochain_serialized_bytes",

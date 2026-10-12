@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-12
+
+First tagged release: the proof of concept ported to Holochain 0.7.
+
+### Added
+
+- MIT license. The crates declare `license = "MIT"` and are versioned 0.1.0.
+
 ### Changed
 
 - Ported to Holochain 0.7: `hdk 0.7.0`, `hdi 0.8.0`, holonix `main-0.7`, Node 24. A 0.7 DNA is a new network, so data from the 0.1 proof of concept does not carry over.
@@ -26,3 +34,6 @@ All notable changes to this project are recorded here. The format follows [Keep 
 ### Removed
 
 - `workdir/web-happ.yaml` and the `package` script, which pointed at a `ui/` folder removed earlier.
+
+[Unreleased]: https://github.com/Sensorica/file-system-zome/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Sensorica/file-system-zome/releases/tag/v0.1.0

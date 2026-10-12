@@ -1,7 +1,9 @@
 [package]
 name = "file_system"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/Sensorica/file-system-zome"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
