@@ -1,25 +1,19 @@
 {
-  "name": "file-storage-dev",
+  "name": "soushi-cloud-dev",
   "private": true,
-  "workspaces": [
-    "ui",
-    "tests"
-  ],
   "scripts": {
-    "start": "AGENTS=2 npm run network",
-    "network": "hc s clean && npm run build:happ && UI_PORT=8888 concurrently \"npm start -w ui\" \"npm run launch:happ\" \"holochain-playground\"",
-    "test": "npm run build:zomes && hc app pack workdir --recursive && npm t -w tests",
-    "launch:happ": "echo \"pass\" | RUST_LOG=warn hc launch --piped -n $AGENTS workdir/test-happ.happ --ui-port $UI_PORT network mdns",
-    "package": "npm run build:happ && npm run package -w ui && hc web-app pack workdir --recursive",
+    "start": "AGENTS=${AGENTS:-2} npm run network",
+    "network": "hc sandbox clean && npm run build:happ && concurrently -k -n bootstrap,conductors \"npm run local-services\" \"sleep 1 && npm run launch:happ\"",
+    "local-services": "kitsune2-bootstrap-srv --listen 127.0.0.1:${BOOTSTRAP_PORT:-4433}",
+    "launch:happ": "echo pass | hc sandbox --piped generate workdir/soushi-cloud.happ --in-process-lair --num-sandboxes $AGENTS --run=$(yes 0 | head -n $AGENTS | paste -sd, -) network --bootstrap http://127.0.0.1:${BOOTSTRAP_PORT:-4433} quic http://127.0.0.1:${BOOTSTRAP_PORT:-4433}",
+    "test": "npm run build:happ && cargo test",
     "build:happ": "npm run build:zomes && hc app pack workdir --recursive",
-    "build:zomes": "RUSTFLAGS='' CARGO_TARGET_DIR=target cargo build --release --target wasm32-unknown-unknown"
+    "build:zomes": "RUSTFLAGS='--cfg getrandom_backend=\"custom\"' cargo build --release --target wasm32-unknown-unknown"
   },
   "devDependencies": {
-    "@holochain-playground/cli": "^0.1.1",
-    "concurrently": "^6.2.1",
-    "rimraf": "^3.0.2"
+    "concurrently": "^9.2.1"
   },
   "engines": {
-    "npm": ">=7.0.0"
+    "node": ">=24.0.0"
   }
 }

@@ -1,30 +1,35 @@
-name: "test"
+name: test
+
 on:
-  # Trigger the workflow on push or pull request,
-  # but only for the main branch
-  push: 
-    branches: [ main, develop ]
+  push:
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 jobs:
-  testbuild:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install nix
-        uses: cachix/install-nix-action@v18
+        uses: cachix/install-nix-action@v31
         with:
-          install_url: https://releases.nixos.org/nix/nix-2.12.0/install
           extra_nix_config: |
             experimental-features = flakes nix-command
 
-      - uses: cachix/cachix-action@v10
+      - uses: cachix/cachix-action@v16
         with:
           name: holochain-ci
 
-      - name: Install and test
-        run: |
-          nix develop --command bash -c "npm i && npm t && cargo test"
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      - name: Build, pack and test
+        run: nix develop --command bash -c "npm ci && npm test"
