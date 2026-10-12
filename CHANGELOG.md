@@ -10,6 +10,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - Validation uses the 0.7 `FlatOp` shape; signals match on `ActionData`; links are read with `LinkQuery` and `GetStrategy`.
 - DNA and hApp manifests moved to the 0.7 format.
 - Tests moved from Tryorama to Sweettest, eight two-agent scenarios run by `npm test`, signals included. Tryorama has no Holochain 0.7 release.
+- Rustdoc for every public item: crate overviews, field docs, `# Errors` sections, doctested path helpers. `npm run doc` (run in CI) fails on any rustdoc warning, and the coordinator enforces `missing_docs`.
 - `npm start` runs a local bootstrap and relay server with two conductors.
 
 ### Fixed

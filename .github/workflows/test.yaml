@@ -32,4 +32,4 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Build, pack and test
-        run: nix develop --command bash -c "npm ci && npm test"
+        run: nix develop --command bash -c "npm ci && npm test && npm run doc"

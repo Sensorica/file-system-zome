@@ -11,6 +11,7 @@ npm install            # first time
 npm run build:zomes    # wasm only; needs RUSTFLAGS='--cfg getrandom_backend="custom"' (set by the script)
 npm run build:happ     # wasm + dnas/file_system/workdir/file_system.dna + workdir/soushi-cloud.happ
 npm test               # build:happ, then cargo test (path unit tests + Sweettest)
+npm run doc            # rustdoc, warnings are errors; the coordinator also enforces missing_docs
 npm start              # kitsune2 bootstrap/relay on 127.0.0.1:4433 + 2 conductors (AGENTS=n to change)
 ```
 

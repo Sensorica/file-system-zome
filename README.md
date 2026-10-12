@@ -63,6 +63,7 @@ Other scripts:
 ```bash
 npm run build:zomes   # wasm only
 npm run build:happ    # wasm + workdir/soushi-cloud.happ
+npm run doc           # API docs in target/doc/file_system/index.html; fails on any rustdoc warning
 cargo test -p file_system --test file_system create_files_and_list_them_by_path   # one scenario
 ```
 

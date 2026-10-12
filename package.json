@@ -7,6 +7,7 @@
     "local-services": "kitsune2-bootstrap-srv --listen 127.0.0.1:${BOOTSTRAP_PORT:-4433}",
     "launch:happ": "echo pass | hc sandbox --piped generate workdir/soushi-cloud.happ --in-process-lair --num-sandboxes $AGENTS --run=$(yes 0 | head -n $AGENTS | paste -sd, -) network --bootstrap http://127.0.0.1:${BOOTSTRAP_PORT:-4433} quic http://127.0.0.1:${BOOTSTRAP_PORT:-4433}",
     "test": "npm run build:happ && cargo test",
+    "doc": "RUSTDOCFLAGS='-D warnings' cargo doc --no-deps -p file_system -p file_system_integrity",
     "build:happ": "npm run build:zomes && hc app pack workdir --recursive",
     "build:zomes": "RUSTFLAGS='--cfg getrandom_backend=\"custom\"' cargo build --release --target wasm32-unknown-unknown"
   },
