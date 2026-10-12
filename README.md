@@ -15,9 +15,11 @@ A Holochain building block for organizing files: it stores files in the DHT, ind
 | Recursive listing: a directory returns its files and those of every subdirectory | `create_files_and_list_them_by_path` |
 | Content split into 1 MB chunks and reassembled byte for byte | `large_file_is_chunked_and_deleted` |
 | Version chain: updates link to the original, reads resolve to the newest version | `update_file_twice_then_delete_in_cascade` |
+| Updates keep the chunks the new version reuses (re-save, append) | `update_keeps_chunks_the_new_version_reuses` |
+| Update and delete only accept a file's original hash | `update_and_delete_require_the_original_hash` |
 | Duplicate path and name refused | `update_file_twice_then_delete_in_cascade` |
 | Delete removes every version, its chunks and its directory entry | `update_file_twice_then_delete_in_cascade`, `deleted_file_leaves_its_directory_listing` |
-| Validation: empty names and forbidden path characters rejected by every peer | `validation_and_path_standardization` |
+| Validation: empty names and forbidden path characters rejected at authoring and by entry authorities | `validation_and_path_standardization` |
 | Path standardization: `\`, `/` and repeated separators normalized | `validation_and_path_standardization`, unit tests in `files.rs` |
 | Signals on create, update and delete of file metadata | `file_metadata_changes_emit_signals` |
 
@@ -27,6 +29,7 @@ These are real and tracked; they are the next iteration's work, not hidden behav
 
 - **Shared chunks.** Chunks are deduplicated by content, so two files with an identical 1 MB chunk share one chunk record. Deleting or updating one of them deletes the chunk the other still points to.
 - **No ownership rules.** Validation does not check that only the author updates or deletes a file, and does not enforce that `name`, `path` and `file_type` stay unchanged across versions.
+- **Concurrent creates.** Two agents creating the same path and name at the same moment both succeed; the duplicate check only sees what has already synced.
 - **Recursive listing walks the whole subtree** on every call; there is no non-recursive listing yet.
 - **`FileMetadata` still carries `author`, `created` and `last_modified`**, which duplicate the action header. The target model moves them out (see Roadmap).
 

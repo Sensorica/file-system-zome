@@ -123,7 +123,7 @@ Once chunk operations are fully delegated, remove `FileChunk` from this project'
 
 ## Phase 3 — Bug Fixes
 
-**Status:** done on 2026-10-12, both bugs fixed and covered by `deleted_file_leaves_its_directory_listing`. A third was fixed on the way: deleting a never-updated file left its chunks behind.
+**Status:** done on 2026-10-12, both bugs fixed; the path link cleanup is covered by `deleted_file_leaves_its_directory_listing`. Fixed on the way: chunks left behind when deleting a never-updated file, updates failing when a chunk is reused, and update/delete accepting a later version's hash.
 
 **Objective:** Fix all known issues identified in the current implementation.
 
