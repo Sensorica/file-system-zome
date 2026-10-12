@@ -114,6 +114,7 @@ pub fn update_file(
 ) -> ExternResult<FileOutput> {
     let original_file_metadata_hash = update_file_metadata_input.original_file_metadata_hash;
     let new_content = update_file_metadata_input.new_content.bytes();
+    ensure_original_version(&original_file_metadata_hash)?;
 
     let previous_file_metadata_hash = latest_file_metadata_hash(&original_file_metadata_hash)?;
 
@@ -131,9 +132,15 @@ pub fn update_file(
     file_metadata.size = new_content.len();
     file_metadata.chunks_hashes = chunks_hashes.clone();
 
+    // Chunks are content-addressed: keep the ones the new version reuses, and delete each other one once.
+    let mut deleted_chunks = Vec::new();
     for chunk_hash in old_chunks_hashes {
+        if chunks_hashes.contains(&chunk_hash) || deleted_chunks.contains(&chunk_hash) {
+            continue;
+        }
         let chunk_record = get_file_chunk(chunk_hash.clone())?;
         delete_entry(chunk_record.signed_action.hashed.hash)?;
+        deleted_chunks.push(chunk_hash);
     }
 
     let updated_metadata_record = update_file_metadata(
@@ -160,9 +167,7 @@ pub fn delete_file(original_file_metadata_hash: ActionHash) -> ExternResult<Vec<
     let mut delete_actions: Vec<ActionHash> = Vec::new();
 
     // `path` never changes across versions, so the original entry tells us where the file is indexed.
-    let original_record = get(original_file_metadata_hash.clone(), GetOptions::default())?.ok_or(
-        wasm_error!(WasmErrorInner::Guest(String::from("File not found"))),
-    )?;
+    let original_record = ensure_original_version(&original_file_metadata_hash)?;
     let original_file_metadata = FileMetadata::try_from(original_record)?;
     delete_actions.extend(delete_path_link(
         &original_file_metadata.path,
@@ -186,22 +191,41 @@ pub fn delete_file(original_file_metadata_hash: ActionHash) -> ExternResult<Vec<
             }
         }
 
-        let file_chunks = get_file_chunks(latest_metadata_hash.clone())?;
-        for file_chunk in file_chunks {
-            delete_actions.push(delete_entry(file_chunk.signed_action.hashed.hash)?);
-        }
-
+        delete_actions.extend(delete_chunks_of(latest_metadata_hash.clone())?);
         delete_actions.push(delete_entry(latest_metadata_hash)?);
     } else {
-        let file_chunks = get_file_chunks(original_file_metadata_hash.clone())?;
-        for file_chunk in file_chunks {
-            delete_actions.push(delete_entry(file_chunk.signed_action.hashed.hash)?);
-        }
+        delete_actions.extend(delete_chunks_of(original_file_metadata_hash.clone())?);
     }
 
     delete_actions.push(delete_entry(original_file_metadata_hash)?);
 
     Ok(delete_actions)
+}
+
+/// Deletes the chunks of one file version, each chunk record once even when the file repeats a chunk.
+fn delete_chunks_of(file_metadata_hash: ActionHash) -> ExternResult<Vec<ActionHash>> {
+    let mut deleted: Vec<ActionHash> = Vec::new();
+    for file_chunk in get_file_chunks(file_metadata_hash)? {
+        let chunk_action_hash = file_chunk.signed_action.hashed.hash;
+        if !deleted.contains(&chunk_action_hash) {
+            delete_entry(chunk_action_hash.clone())?;
+            deleted.push(chunk_action_hash);
+        }
+    }
+    Ok(deleted)
+}
+
+/// Returns the record behind `hash`, failing unless it is the create action that identifies a file.
+/// Update and delete take the original hash; a later version's hash would leave the path index dangling.
+fn ensure_original_version(hash: &ActionHash) -> ExternResult<Record> {
+    let record = get(hash.clone(), GetOptions::default())?
+        .ok_or(wasm_error!(WasmErrorInner::Guest(String::from("File not found"))))?;
+    match &record.action().data {
+        ActionData::Create(_) => Ok(record),
+        _ => Err(wasm_error!(WasmErrorInner::Guest(String::from(
+            "Expected the original file metadata hash, got a later version"
+        )))),
+    }
 }
 
 /// Returns the hash of the most recent version of a file, or `None` if it was never updated.

@@ -145,10 +145,10 @@ async fn update_file_twice_then_delete_in_cascade() {
     let duplicate: Result<FileOutput, _> = alice_conductor
         .call_fallible(&alice, "create_file", file_input("/", "test.txt", b"new content"))
         .await;
-    assert!(duplicate.is_err());
+    assert!(duplicate.unwrap_err().to_string().contains("File already exists"));
 
     // First update: Bob reads the new content through the original hash.
-    let _: FileOutput = alice_conductor
+    let first: FileOutput = alice_conductor
         .call(
             &alice,
             "update_file",
@@ -183,8 +183,9 @@ async fn update_file_twice_then_delete_in_cascade() {
     let _: Vec<ActionHash> = alice_conductor.call(&alice, "delete_file", original_hash.clone()).await;
     scenario.sync().await;
 
+    let first_hash = first.file_metadata.action_address().clone();
     let second_hash = second.file_metadata.action_address().clone();
-    for hash in [original_hash, second_hash] {
+    for hash in [original_hash, first_hash, second_hash] {
         let read: Option<Record> = bob_conductor.call(&bob, "get_file_metadata", hash.clone()).await;
         assert!(read.is_none());
         let chunks: Vec<Record> = bob_conductor.call(&bob, "get_file_chunks", hash).await;
@@ -291,4 +292,76 @@ async fn file_metadata_changes_emit_signals() {
         }
     }
     assert_eq!(kinds, vec!["created", "updated", "deleted"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn update_keeps_chunks_the_new_version_reuses() {
+    let scenario = Scenario::two_agents().await;
+    let (alice_conductor, alice) = scenario.alice();
+    let (bob_conductor, bob) = scenario.bob();
+
+    // 1.5 MB: the first 1 MB chunk is unchanged by both updates below.
+    let v1: Vec<u8> = (0..1_536 * 1024).map(|i| (i % 251) as u8).collect();
+    let output = create_file(alice_conductor, &alice, file_input("/", "growing.bin", &v1)).await;
+    let original_hash = output.file_metadata.action_address().clone();
+
+    let update = |content: Vec<u8>| UpdateFileMetadataInput {
+        original_file_metadata_hash: original_hash.clone(),
+        new_content: SerializedBytes::from(UnsafeBytes::from(content)),
+    };
+
+    // Re-saving identical content, then appending, both succeed.
+    let _: FileOutput = alice_conductor.call(&alice, "update_file", update(v1.clone())).await;
+    let mut v2 = v1.clone();
+    v2.extend_from_slice(b"appended");
+    let _: FileOutput = alice_conductor.call(&alice, "update_file", update(v2.clone())).await;
+    scenario.sync().await;
+
+    let chunks: Vec<Record> = bob_conductor.call(&bob, "get_file_chunks", original_hash).await;
+    let reassembled: Vec<u8> = chunks.iter().flat_map(chunk_bytes).collect();
+    assert_eq!(reassembled, v2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn update_and_delete_require_the_original_hash() {
+    let scenario = Scenario::two_agents().await;
+    let (alice_conductor, alice) = scenario.alice();
+
+    let output = create_file(alice_conductor, &alice, file_input("/", "versioned.txt", b"v1")).await;
+    let original_hash = output.file_metadata.action_address().clone();
+    let updated: FileOutput = alice_conductor
+        .call(
+            &alice,
+            "update_file",
+            UpdateFileMetadataInput {
+                original_file_metadata_hash: original_hash.clone(),
+                new_content: SerializedBytes::from(UnsafeBytes::from(b"v2".to_vec())),
+            },
+        )
+        .await;
+    let version_hash = updated.file_metadata.action_address().clone();
+
+    let delete_by_version: Result<Vec<ActionHash>, _> = alice_conductor
+        .call_fallible(&alice, "delete_file", version_hash.clone())
+        .await;
+    assert!(delete_by_version
+        .unwrap_err()
+        .to_string()
+        .contains("Expected the original file metadata hash"));
+
+    let update_by_version: Result<FileOutput, _> = alice_conductor
+        .call_fallible(
+            &alice,
+            "update_file",
+            UpdateFileMetadataInput {
+                original_file_metadata_hash: version_hash,
+                new_content: SerializedBytes::from(UnsafeBytes::from(b"v3".to_vec())),
+            },
+        )
+        .await;
+    assert!(update_by_version.is_err());
+
+    // The file is untouched and still listed.
+    let listed = list_recursively(alice_conductor, &alice, "/").await;
+    assert_eq!(listed.len(), 1);
 }

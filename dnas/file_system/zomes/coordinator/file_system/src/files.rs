@@ -93,10 +93,10 @@ pub fn get_file_metadata_by_path_and_name(path: String, name: String) -> ExternR
     )?;
 
     for link in files_links {
-        let file_metadata_record = get_file_metadata(link_target_action_hash(&link)?)?
-            .ok_or(wasm_error!(WasmErrorInner::Guest(String::from(
-                "Could not find the newly created file metadata"
-            ))))?;
+        // A link whose file is gone (deleted, or not yet visible) does not hold the name.
+        let Some(file_metadata_record) = get_file_metadata(link_target_action_hash(&link)?)? else {
+            continue;
+        };
         let file_metadata: FileMetadata = file_metadata_record.clone().try_into()?;
         if file_metadata.name == name {
             return Ok(file_metadata_record);
